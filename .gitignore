@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# Large / optional data (fetch with scripts/download_data.py --all)
+data/goalscorers.csv
+
+# Generated predictions (re-created by `python main.py`)
+output/*.csv

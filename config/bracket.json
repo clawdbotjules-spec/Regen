@@ -1,0 +1,58 @@
+{
+  "_comment": [
+    "2026 World Cup knockout bracket (Round of 32 -> Final).",
+    "Slots: 'W_<g>' = winner of group g, 'R_<g>' = runner-up of group g,",
+    "'T_<k>' = k-th best 3rd-placed team (T_1 = best 3rd, ... T_8 = 8th best),",
+    "and 'M<id>' = winner of an earlier match.",
+    "This is a balanced, fully-specified bracket: every R32 match pairs a",
+    "team from a different group, group winners are spread across the draw,",
+    "and the two halves (M1-M8 vs M9-M16) only meet in the Final.",
+    "The official FIFA R32 third-place allocation depends on WHICH 8 groups",
+    "the 3rd-placed teams come from (a 495-row lookup table). This file uses",
+    "a rank-ordered assignment instead (see README, STEP 3). Replace the",
+    "matchups below to plug in the official pairings once finalised."
+  ],
+  "rounds": {
+    "R32": [
+      {"id": "M1",  "home": "W_A", "away": "R_B"},
+      {"id": "M2",  "home": "W_C", "away": "T_1"},
+      {"id": "M3",  "home": "W_E", "away": "R_F"},
+      {"id": "M4",  "home": "W_G", "away": "T_2"},
+      {"id": "M5",  "home": "W_I", "away": "R_J"},
+      {"id": "M6",  "home": "W_K", "away": "T_3"},
+      {"id": "M7",  "home": "R_D", "away": "T_4"},
+      {"id": "M8",  "home": "R_H", "away": "R_L"},
+      {"id": "M9",  "home": "W_B", "away": "R_A"},
+      {"id": "M10", "home": "W_D", "away": "T_5"},
+      {"id": "M11", "home": "W_F", "away": "R_E"},
+      {"id": "M12", "home": "W_H", "away": "T_6"},
+      {"id": "M13", "home": "W_J", "away": "R_I"},
+      {"id": "M14", "home": "W_L", "away": "T_7"},
+      {"id": "M15", "home": "R_C", "away": "T_8"},
+      {"id": "M16", "home": "R_G", "away": "R_K"}
+    ],
+    "R16": [
+      {"id": "M17", "home": "M1",  "away": "M2"},
+      {"id": "M18", "home": "M3",  "away": "M4"},
+      {"id": "M19", "home": "M5",  "away": "M6"},
+      {"id": "M20", "home": "M7",  "away": "M8"},
+      {"id": "M21", "home": "M9",  "away": "M10"},
+      {"id": "M22", "home": "M11", "away": "M12"},
+      {"id": "M23", "home": "M13", "away": "M14"},
+      {"id": "M24", "home": "M15", "away": "M16"}
+    ],
+    "QF": [
+      {"id": "M25", "home": "M17", "away": "M18"},
+      {"id": "M26", "home": "M19", "away": "M20"},
+      {"id": "M27", "home": "M21", "away": "M22"},
+      {"id": "M28", "home": "M23", "away": "M24"}
+    ],
+    "SF": [
+      {"id": "M29", "home": "M25", "away": "M26"},
+      {"id": "M30", "home": "M27", "away": "M28"}
+    ],
+    "F": [
+      {"id": "M31", "home": "M29", "away": "M30"}
+    ]
+  }
+}
