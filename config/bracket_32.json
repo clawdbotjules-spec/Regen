@@ -1,0 +1,32 @@
+{
+  "_comment": [
+    "Classic 32-team World Cup knockout chart (used by 2018 and 2022),",
+    "FIFA match numbers 49-64. Used by the tournament-level backtest."
+  ],
+  "entry_round": "R16",
+  "rounds": {
+    "R16": [
+      {"id": "M49", "home": "W_A", "away": "R_B"},
+      {"id": "M50", "home": "W_C", "away": "R_D"},
+      {"id": "M51", "home": "W_B", "away": "R_A"},
+      {"id": "M52", "home": "W_D", "away": "R_C"},
+      {"id": "M53", "home": "W_E", "away": "R_F"},
+      {"id": "M54", "home": "W_G", "away": "R_H"},
+      {"id": "M55", "home": "W_F", "away": "R_E"},
+      {"id": "M56", "home": "W_H", "away": "R_G"}
+    ],
+    "QF": [
+      {"id": "M57", "home": "M49", "away": "M50"},
+      {"id": "M58", "home": "M53", "away": "M54"},
+      {"id": "M59", "home": "M51", "away": "M52"},
+      {"id": "M60", "home": "M55", "away": "M56"}
+    ],
+    "SF": [
+      {"id": "M61", "home": "M57", "away": "M58"},
+      {"id": "M62", "home": "M59", "away": "M60"}
+    ],
+    "F": [
+      {"id": "M64", "home": "M61", "away": "M62"}
+    ]
+  }
+}

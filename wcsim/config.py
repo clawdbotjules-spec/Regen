@@ -67,6 +67,7 @@ class SimConfig:
     # ---- I/O -------------------------------------------------------------- #
     data_dir: str = "data"
     output_path: str = "output/predictions.csv"
+    output_dir: str = "output"          # extra analysis CSVs land here
     bracket_path: str = "config/bracket.json"
 
     # ---- Reproducibility / scale ----------------------------------------- #
@@ -78,7 +79,8 @@ class SimConfig:
     elo_home_advantage: float = 100.0   # Elo points added to a non-neutral host
     elo_cutoff: str | None = None       # ISO date; ratings as-of this date (None = all data)
 
-    # ---- Dixon-Coles goals model ----------------------------------------- #
+    # ---- Goals models ------------------------------------------------------ #
+    model_name: str = "ensemble"        # dc | bp | nb | ensemble
     half_life_days: float = 1095.0      # time-decay half-life for the goals fit (~3 yrs)
     friendly_weight: float = 0.5        # down-weight friendlies in the goals fit
     fit_min_year: int | None = 1990     # ignore very old matches when fitting goals
@@ -87,16 +89,24 @@ class SimConfig:
     # ---- Tournament / 2026 specifics ------------------------------------- #
     host_boost: float = 0.0             # extra Elo for USA/Canada/Mexico in WC matches
     host_teams: tuple = ("United States", "Canada", "Mexico")
-    shootout_elo_weight: float = 0.5    # 0 == pure coin flip, 1 == full Elo-implied
+    host_group_home: bool = True        # hosts play their group matches at home venues
+    shootout_model: str = "empirical"   # empirical (logistic fit on shootouts.csv) | weighted
+    shootout_elo_weight: float = 0.5    # for shootout_model=weighted: 0 = coin flip, 1 = Elo
 
     # ---- Validation ------------------------------------------------------- #
     backtest_years: tuple = (2018, 2022)
+    backtest_sims: int = 10_000         # sims per tournament-level backtest
+    sens_sims: int = 4_000              # sims per sensitivity-analysis variation
 
     def __post_init__(self) -> None:
         if self.n_sims <= 0:
             raise ValueError("n_sims must be positive")
         if not 0.0 <= self.shootout_elo_weight <= 1.0:
             raise ValueError("shootout_elo_weight must be in [0, 1]")
+        if self.model_name not in ("dc", "bp", "nb", "ensemble"):
+            raise ValueError(f"unknown model '{self.model_name}'")
+        if self.shootout_model not in ("empirical", "weighted"):
+            raise ValueError(f"unknown shootout model '{self.shootout_model}'")
 
 
 # Canonical team-name aliases: maps names that appear in groups.csv (or other

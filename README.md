@@ -2,18 +2,22 @@
 
 A Monte-Carlo simulator that estimates how far each of the 48 teams is likely
 to advance at the 2026 World Cup. It walks ~150 years of international results
-to build **World-Football-Elo** ratings, fits a **Dixon-Coles** Poisson goals
-model on top of those ratings, and then simulates the full 48-team / 12-group
-tournament tens of thousands of times.
+to build **World-Football-Elo** ratings, fits a **suite of goal-scoring models**
+(Dixon-Coles, bivariate Poisson, negative binomial, and an ensemble of the
+three) on top of those ratings, and simulates the full 48-team tournament
+through the **official post-draw knockout bracket** (FIFA matches 73–104,
+including the constrained third-place allocation) tens of thousands of times.
 
 For every team it reports the probability of reaching each stage — **Round of
-32, Round of 16, Quarter-final, Semi-final, Final, Champion** — plus the single
-most likely stage at which they bow out.
+32, Round of 16, Quarter-final, Semi-final, Final, Champion** — plus
+round-by-round matchup probabilities, likely opponents, most likely Finals,
+group-position distributions, headline joint probabilities, sensitivity bands
+and a two-tournament backtest.
 
 > ⚠️ **This is for analysis and entertainment.** International football is
-> noisy, a World Cup is a tiny sample, and (as the backtest below shows) this
-> model is roughly on par with a plain Elo baseline and **will not reliably
-> beat sharp betting markets.** Don't bet your house on it.
+> noisy and a World Cup is a tiny sample. As the backtests below show, the
+> goal models are statistically tied with a plain Elo baseline at match level,
+> and nothing here will reliably beat sharp betting markets.
 
 ---
 
@@ -21,28 +25,41 @@ most likely stage at which they bow out.
 
 ```bash
 python -m pip install -r requirements.txt   # pandas, numpy, scipy
-python scripts/download_data.py             # fetch results.csv + shootouts.csv
-python main.py                              # 20,000 simulations, seed 42
+python main.py                              # 20,000 sims, ensemble model, seed 42
 ```
 
-`results.csv` and `shootouts.csv` are also committed, so `python main.py` works
-out of the box. `groups.csv` (the 2026 draw) lives in `data/`.
+The data (`results.csv`, `shootouts.csv`, `groups.csv`) is committed, so this
+works out of the box; refresh the history any time with
+`python scripts/download_data.py`.
 
 ### Useful flags
 
 ```bash
-python main.py -n 50000 --seed 7      # more simulations, different seed
-python main.py --validate             # run the 2018/2022 backtest first
-python main.py --show-ratings 30      # print the top-30 Elo table
-python main.py --half-life 540        # shorter goals-model memory (~1.5 yrs)
-python main.py --friendly-weight 0.25 # trust friendlies even less
-python main.py --host-boost 30        # give USA/Canada/Mexico an Elo bump
-python main.py --shootout-weight 0    # pure coin-flip penalty shootouts
-python main.py --help                 # all options
+python main.py -n 50000 --seed 7        # more sims, different seed
+python main.py --model dc               # Dixon-Coles only (or bp / nb / ensemble)
+python main.py --validate               # match- AND tournament-level backtests
+python main.py --sensitivity            # knob + parameter uncertainty report
+python main.py --half-life 540          # shorter goals-model memory (~1.5 yrs)
+python main.py --friendly-weight 0.25   # trust friendlies even less
+python main.py --no-host-home           # treat host group matches as neutral
+python main.py --shootout-model weighted --shootout-weight 0   # coin-flip pens
+python main.py --help                   # everything else
 ```
 
-Output: a sorted table to the console (Champion % descending) and the full
-table to `output/predictions.csv`.
+### Outputs (written to `output/`)
+
+| file | contents |
+|---|---|
+| `predictions.csv` | per team: P(reach each stage), MC standard error, modal finish |
+| `group_stats.csv` | P(1st/2nd/3rd/4th), P(advance), P(advance as 3rd), expected pts/GF/GA |
+| `stage_distribution.csv` | exact elimination-stage distribution (rows sum to 100%) |
+| `r32_matchups.csv` | most likely pairings for each official R32 match |
+| `opponents_by_round.csv` | per team & round: P(play) and likeliest opponents |
+| `meet_matrix.csv` | 48x48 P(the two teams meet in a knockout match) |
+| `finals.csv` | most likely Finals pairings |
+| `headline_stats.csv` | host/confederation/seed joint probabilities |
+| `conditional_advancement.csv` | P(win the round \| reached it), per team |
+| `sensitivity.csv` | champion % under every modeling variation (with `--sensitivity`) |
 
 ---
 
@@ -50,171 +67,177 @@ table to `output/predictions.csv`.
 
 ### Data (`wcsim/data.py`)
 Source: the **martj42 "International football results 1872→2026"** dataset
-(`results.csv`, `shootouts.csv`, optional `goalscorers.csv`). Cleaning:
-
-- parse dates; **drop fixtures with no recorded score** (future/scheduled rows),
-- cast scores to int, coerce `neutral` to a real boolean,
-- **normalise team names** via an alias map so the draw matches the history
-  (e.g. `Curacao → Curaçao`, `USA → United States`, `Türkiye → Turkey`),
-- expose two weighting controls used by the goals model:
-  - **exponential time decay** with a configurable half-life in days
-    (`weight = 0.5 ** (age_days / half_life)`), so recent matches count more,
-  - **competition weighting** that down-weights friendlies vs. competitive games.
+(49,400 cleaned matches). Cleaning: parse dates, drop unplayed fixtures,
+coerce types, **normalise team names** via an alias map (`Curacao → Curaçao`,
+`Türkiye → Turkey`, …). Two weighting controls feed the goals fit:
+exponential **time decay** (configurable half-life, default ~3 years) and a
+**friendly down-weight** (default 0.5).
 
 ### Step 1 — Team strength: Elo (`wcsim/elo.py`)
-A standard [World Football Elo](https://en.wikipedia.org/wiki/World_Football_Elo_Ratings)
-walk over the full match history in chronological order:
+A standard World-Football-Elo walk over the full history in chronological
+order: expected score `1/(1+10^(-dr/400))`, +100 home advantage at non-neutral
+venues, K scaled by competition importance (60 World Cup … 20 friendly) × the
+usual goal-difference multiplier. The walk records each match's **pre-game
+ratings**, which become the strength feature for every goals model — so the
+models are trained on exactly the ratings the simulator later uses. Top of the
+2026 table: Spain, Argentina, France, England, Brazil — sane.
 
-- expected score `We = 1 / (1 + 10**(-dr/400))`, where `dr = R_home − R_away`
-  plus a **+100 home advantage** unless the match is at a neutral venue,
-- K-factor `K = importance(tournament) × goal_difference_multiplier(margin)`
-  (importance: 60 World Cup, 50 continental finals, 40 qualifiers/Nations
-  League, 30 other, 20 friendlies; the margin multiplier is the usual
-  1.5 for a 2-goal win, 1.75 for 3, etc.),
-- update `R' = R + K·(W − We)` for both teams.
+### Step 2 — Match models (`wcsim/match_model.py`)
+All models share the same log-linear link from Elo to expected goals
+(`log λ = c0 + c1·ΔElo/100 + c2·home`), are fit by **weighted MLE**, and
+return both W/D/L probabilities and sampled scorelines:
 
-The walk also records each match's **pre-game ratings**, which become the
-strength feature for the goals model — so the goals model is trained on exactly
-the ratings the simulator later uses. Run with `--show-ratings` to sanity-check;
-the top of the table (Spain, Argentina, France, England, Brazil…) looks right.
+- **`dc` Dixon-Coles** — independent Poissons with the τ low-score correction
+  (fitted ρ ≈ −0.04, the textbook mild negative value).
+- **`bp` bivariate Poisson** (Karlis-Ntzoufras) — a shared Poisson component
+  creates positive score correlation. Honest finding: the fitted shared
+  component is ≈ 0 on this data — once Elo sets the means, scores show no
+  extra positive correlation, so BP nearly degenerates to a double Poisson.
+- **`nb` negative binomial** — over-dispersed goals (fitted dispersion r ≈ 9,
+  i.e. variance ≈ 1.14× mean at typical scoring rates: mild fat tails).
+- **`ensemble`** (default) — equal-weight mixture of the three. Sampling draws
+  each scoreline from a randomly chosen member, which is exactly sampling
+  from the averaged distribution.
 
-### Step 2 — Match model: Dixon-Coles (`wcsim/match_model.py`)
-Goals for each side are modelled as Poisson with a low-score correction
-([Dixon & Coles 1997](https://doi.org/10.1111/1467-9876.00065)):
-
-```
-log λ_home = c0 + c1·(R_home − R_away)/100 + c2·home_flag
-log μ_away = c0 − c1·(R_home − R_away)/100
-P(x,y)     = τ(x,y; λ,μ,ρ) · Poisson(x; λ) · Poisson(y; μ)
-```
-
-`c0` is the baseline scoring rate, `c1` turns an Elo edge into goal supremacy,
-`c2` is the home effect (applied only at non-neutral venues), and the
-Dixon-Coles `τ(·)` term with parameter `ρ` corrects the dependence in the
-0-0 / 1-0 / 0-1 / 1-1 cells. All four parameters are fit jointly by **weighted
-maximum likelihood** (time-decay × competition weight) with `scipy.optimize`.
-
-The model returns both **win/draw/loss probabilities** (for the backtest) and a
-**sampled scoreline** (for the simulator), because the group stage needs goal
-difference and goals scored for tiebreakers. A typical fit:
-
-```
-c0 = 0.107  -> ~1.11 goals/side in a neutral, even game
-c1 = 0.184  per 100 Elo points
-c2 = 0.228  -> home teams score ~1.26x
-ρ  = -0.038 (mild, the usual negative Dixon-Coles value)
-```
+### Step 2b — Penalty shootouts (`wcsim/shootout.py`)
+Instead of a hand-tuned "coin flip weighted slightly by strength", the default
+model is **fit on the actual shootout history** (677 shootouts joined to their
+pre-match Elo): a one-parameter logistic on the Elo difference. The data says
+shootouts are nearly coin flips — a +100-Elo side wins just **53.5%** — and
+that's what the simulator uses. `--shootout-model weighted` restores the
+manual interpolation if you want to play with it.
 
 ### Step 3 — Tournament structure (`wcsim/tournament.py`, `wcsim/simulate.py`)
-The **2026 format**: 48 teams in 12 groups of 4; each team plays its 3
-group-mates once. The **top 2 of every group (24) plus the 8 best 3rd-placed
-teams = 32** advance to a Round of 32, then single elimination
-R32 → R16 → QF → SF → Final.
+2026 format: 12 groups of 4 → top 2 plus the **8 best third-placed teams**
+(ranked across groups by points → GD → GF) → Round of 32 → … → Final. Group
+tiebreakers: points → GD → GF → head-to-head mini-league among tied teams →
+random.
 
-- **Group ranking tiebreakers**, in order: points → goal difference →
-  goals scored → **head-to-head** (mini-league points among teams tied on
-  points, GD and GF) → random.
-- **8 best third-placed teams** ranked across all 12 groups by points →
-  goal difference → goals scored.
-- **Knockouts**: a drawn game goes to a **penalty shootout** modelled as a
-  coin flip nudged slightly by Elo (`--shootout-weight`, 0 = pure coin flip).
-- **Bracket wiring is configurable** in [`config/bracket.json`](config/bracket.json):
-  every R32 → Final match is a slot reference (`W_A`, `R_B`, `T_3`, or the
-  winner of an earlier match), so you can swap in different pairings without
-  touching code.
+**The bracket is the official one** (`config/bracket.json`, FIFA match numbers
+73–104, verified against the published FIFA schedule): e.g. winner of Group J
+meets the Group H runner-up (an Argentina–Uruguay R32 collision in 44% of
+sims), and each of the 8 third-place R32 slots carries FIFA's exact 5-group
+candidate set (e.g. M74: Winner E vs 3rd of A/B/C/D/F). Third-placed teams are
+assigned to slots by a **constraint-respecting deterministic matching**
+(validated against all C(12,8) = 495 qualification combinations): like FIFA's
+Annex C table, the assignment depends only on *which* groups qualify. The one
+approximation: where FIFA's table picks a specific row, we use an
+alphabetical-first feasible assignment — same constraints, possibly different
+slot order within them. The third-place playoff (M103) is omitted (it doesn't
+affect how far anyone advances). Hosts (Mexico, Canada, USA) play their
+**group matches at home** by default (`--no-host-home` to disable); knockout
+venues are treated as neutral.
 
-> **Caveat on the bracket.** The *official* R32 pairings depend on **which** 8
-> groups the third-placed teams come from (a 495-row FIFA lookup table). This
-> repo ships a **balanced, representative** bracket and assigns the qualifying
-> thirds in **rank order** (`T_1` = best third … `T_8` = 8th). The shipped
-> bracket spreads the group winners across the draw and keeps the two halves
-> apart until the Final, but it is **not** the official seeding. Drop the real
-> pairings into `config/bracket.json` once finalised. Aggregate "reach stage X"
-> probabilities are fairly robust to this; exact opponent paths are not.
-
-The whole tournament is **vectorised across the N simulations** (numpy arrays
-with a leading axis of length N), so 20,000 tournaments — including the
-150-year Elo walk and the model fit — run in **~4 seconds**.
+The engine is **fully vectorised across simulations** — 20,000 tournaments
+including the Elo walk, three model fits and all analysis take ~6 seconds.
 
 ### Step 4 — Groups input (`data/groups.csv`)
-The 48 teams and their group assignments are read from `data/groups.csv`
-(columns `group, team`); nothing is hard-coded. Any team in `groups.csv` with
-no rating from the history triggers a warning and falls back to the initial
-rating (1500). With the current draw, all 48 teams match the history.
+The 48 teams / 12 groups are read from `data/groups.csv` — which matches the
+real December 5, 2025 draw team-for-team. Teams missing from the history get
+a warning and the initial 1500 rating (currently: none).
 
-### Step 5 — Simulate (`wcsim/simulate.py`)
-Runs `N` simulations (default 20,000, `-n`), aggregates each team's frequency
-of reaching each stage, prints a table sorted by Champion % and writes
-`output/predictions.csv`. The `most_likely_finish` column is the modal stage at
-which a team is eliminated (e.g. "Round of 32" = usually qualifies from the
-group but loses its first knockout game; "Group stage" = usually eliminated in
-the group). A fixed `--seed` makes runs reproducible.
+### Step 5 — Simulate & analyse (`wcsim/simulate.py`, `wcsim/analysis.py`)
+Default 20,000 sims (`-n`), fixed seed (`--seed`), bitwise-reproducible.
+Beyond the headline table, the analysis layer aggregates **every recorded
+possibility**: group position distributions, exact elimination stages, every
+knockout slot's likely pairings, per-team likely opponents per round, the
+48×48 "probability we ever meet" matrix, most likely Finals, conditional
+win-rates per round, and joint headline events (host runs, confederation
+champions, top-seed outcomes).
 
-### Step 6 — Validation / backtest (`wcsim/validate.py`)
-Backtests the goals model on the **2018 and 2022** World Cups: for each, it
-trains **only on matches before the tournament**, predicts every actual finals
-match, and reports **multiclass log-loss** and **Brier score** against a
-**Davidson Elo-only baseline** (a one-parameter Elo → win/draw/loss map, fit by
-MLE). Knockout games decided on penalties are scored as draws (their 90'/120'
-result), i.e. we grade the pre-shootout 3-way prediction.
+### Step 6 — Validation (`wcsim/validate.py`), run with `--validate`
 
-**Results (`python main.py --validate`):**
+**Match-level** (train strictly pre-tournament, predict all 64 matches,
+multiclass log-loss / Brier / RPS, vs a Davidson Elo-only baseline fit by MLE):
 
-| Tournament | n | Dixon-Coles log-loss | DC Brier | Elo-only log-loss | Elo Brier |
-|---|---|---|---|---|---|
-| WC 2018 | 64 | 0.991 | 0.588 | 0.982 | 0.582 |
-| WC 2022 | 64 | 1.044 | 0.609 | 1.042 | 0.612 |
-| **Pooled** | **128** | **1.017** | **0.599** | **1.012** | **0.597** |
+| pooled 2018+2022 (128) | log-loss | Brier | RPS |
+|---|---|---|---|
+| Elo-only (Davidson) | **1.0119** | 0.5972 | 0.2137 |
+| Negative binomial | 1.0122 | 0.5976 | 0.2138 |
+| Ensemble | 1.0144 | 0.5978 | 0.2140 |
+| Bivariate Poisson | 1.0147 | 0.5976 | 0.2140 |
+| Dixon-Coles | 1.0171 | 0.5986 | 0.2142 |
 
-**Honest read:** on these 128 matches the Dixon-Coles model and a well-tuned
-Elo-only baseline are **effectively tied — Elo is marginally ahead here.** That
-is a common, expected outcome: for 3-way match results a calibrated Elo is very
-hard to beat, and 64-match samples carry wide error bars. The goals model still
-earns its place because it produces **full scorelines**, which the group stage
-needs for goal-difference / goals-scored tiebreakers (Elo alone can't). The
-calibration table printed by `--validate` shows the mid-range probabilities are
-reasonably calibrated. Bottom line: useful for analysis, **not** an edge over
-the market.
+**Honest read:** all five are within 0.005 log-loss — statistically
+indistinguishable on 128 matches, with the Elo baseline nominally first. The
+goal models earn their place not by beating Elo on W/D/L but by producing
+**scorelines** (needed for group tiebreakers) and slightly better draw rates.
+
+**Tournament-level** (re-simulate 2018/2022 with their real groups and
+brackets, 10,000 sims each):
+
+- **WC 2018:** actual champion France was predicted 5.6% (rank 6 of 32);
+  champion log-loss 2.89 vs 3.47 uniform.
+- **WC 2022:** actual champion Argentina was predicted **21.4% (rank 2)**;
+  log-loss 1.54 vs 3.47 uniform.
+- Pooled stage-level Brier skill vs a "everyone equal" baseline: **+22% at
+  R16, +21% at QF, +3% SF, +7% Final, +12% Champion** — real but modest skill,
+  strongest where the field is wide.
+
+### Step 7 — Sensitivity & uncertainty (`wcsim/sensitivity.py`), `--sensitivity`
+Re-runs the simulation under 12 modeling variations (half-life, friendly
+weight, model family, shootout treatment, host assumptions) and reports each
+top team's champion-probability spread vs Monte-Carlo noise — e.g. Spain
+ranges ~19–27% across knobs, with the shootout treatment the biggest lever.
+It also propagates **goals-model parameter uncertainty** (sampling from the
+asymptotic normal around the Dixon-Coles MLE) into champion-probability bands
+(Spain ≈ 14–34% at the 5th–95th percentile). Elo-rating uncertainty itself is
+not modeled — the true bands are wider still.
 
 ---
+
+## Headline results (20,000 sims, ensemble, seed 42)
+
+Spain ~21% champion, Argentina ~17%, France ~9%, England ~6%, Colombia and
+Brazil ~5–6%. UEFA takes the title in ~54% of sims, CONMEBOL ~35%. A host
+nation wins it all in ~3.5% of sims. Most likely Final: Spain vs Argentina
+(~7%). Full numbers regenerate with `python main.py`.
 
 ## Project layout
 
 ```
-main.py                 CLI entry point
+main.py                    CLI entry point
 requirements.txt
-config/bracket.json     configurable R32 -> Final bracket
+config/bracket.json        OFFICIAL 2026 bracket (editable)
+config/bracket_32.json     classic 32-team chart (backtests)
 data/
-  groups.csv            the 2026 draw (committed)
-  results.csv           historical results (committed; refresh via script)
-  shootouts.csv         penalty-shootout history (committed)
+  groups.csv               the real Dec 2025 draw
+  results.csv              historical results (refresh via script)
+  shootouts.csv            shootout history (drives the empirical pens model)
+  confederations.csv       team -> confederation (headline stats)
+  wc2018_groups.csv        2018 groups + actual finishes (backtest)
+  wc2022_groups.csv        2022 groups + actual finishes (backtest)
 scripts/download_data.py
 wcsim/
-  config.py             all tunable parameters + Elo K tiers + name aliases
-  data.py               load / clean / normalise / weight
-  elo.py                World-Football-Elo chronological walk
-  match_model.py        Dixon-Coles Poisson goals model
-  tournament.py         bracket loader + stage definitions
-  simulate.py           vectorised Monte-Carlo engine
-  validate.py           2018/2022 backtest vs Elo baseline
-output/predictions.csv  generated
+  config.py                all tunable parameters, Elo K tiers, name aliases
+  data.py                  load / clean / normalise / weight
+  elo.py                   World-Football-Elo chronological walk
+  match_model.py           DC + bivariate Poisson + negbin + ensemble
+  shootout.py              empirical penalty-shootout model
+  tournament.py            bracket loader + third-place allocation (Kuhn matching)
+  simulate.py              vectorised Monte-Carlo engine (48- and 32-team)
+  analysis.py              round-by-round aggregation layer
+  validate.py              match- and tournament-level backtests
+  sensitivity.py           knob sensitivity + parameter uncertainty
+output/                    generated CSVs
 ```
 
 ## Assumptions & limitations
 
-- **Men's senior international results only**; no club form, injuries,
-  suspensions, squad changes, travel, weather, or in-tournament momentum.
-- **Elo never forgets**, but the goals model uses a time-decay half-life
-  (default ~3 years) so recent form dominates the scoring estimates.
-- **Neutral venues** are assumed for all 2026 matches by default; host nations
-  get no edge unless you pass `--host-boost`.
-- **Shootouts** are a lightly Elo-weighted coin flip, not a penalty model.
-- **Head-to-head** tiebreaks use mini-league points among teams level on
-  points (a reasonable simplification of the full FIFA criteria).
-- The **bracket seeding is representative, not official** (see Step 3).
-- Goals are modelled as (corrected) **Poisson**; real scorelines have fatter
-  tails and correlations this only partly captures.
-
-Everything is configurable from the CLI or `wcsim/config.py` — tune the
-half-life, friendly weight, home advantage, shootout weight, host boost, seed,
-and number of simulations to explore the sensitivity of the results.
+- Men's senior international results only; no club form, injuries, squads,
+  travel, weather, or in-tournament momentum.
+- Elo never forgets; the goals models use a ~3-year half-life so recent form
+  dominates scoring estimates.
+- Host home advantage applies to hosts' group matches only; knockout venues
+  are treated as neutral even when a host would effectively be at home.
+- The third-place slot assignment respects FIFA's constraint sets but may
+  order teams across slots differently than FIFA's Annex C table; aggregate
+  stage probabilities are insensitive to this, exact opponent paths less so.
+- Shootouts are a one-parameter logistic on Elo — no penalty-taker data.
+- Head-to-head tiebreaks use a mini-league among tied teams (a faithful
+  simplification of the full FIFA criteria; fair-play points and disciplinary
+  tiebreakers are replaced by a random draw).
+- All models share the single Elo strength feature; they cannot express
+  attack-vs-defense style differences between equally-rated teams.
+- Parameter uncertainty bands exclude Elo-rating uncertainty, so true
+  uncertainty is wider than reported.
