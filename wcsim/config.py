@@ -71,8 +71,11 @@ class SimConfig:
     bracket_path: str = "config/bracket.json"
 
     # ---- Reproducibility / scale ----------------------------------------- #
+    # 100k sims take ~15s and push Monte-Carlo noise well below model
+    # uncertainty (champion-prob SE ~0.13pp for the favourite); 20k is fine
+    # for quick iteration.
     seed: int = 42
-    n_sims: int = 20_000
+    n_sims: int = 100_000
 
     # ---- Elo -------------------------------------------------------------- #
     elo_initial: float = 1500.0
@@ -80,9 +83,19 @@ class SimConfig:
     elo_cutoff: str | None = None       # ISO date; ratings as-of this date (None = all data)
 
     # ---- Goals models ------------------------------------------------------ #
+    # half_life_days / friendly_weight / slope_scale were grid-searched on
+    # the 1998-2014 World Cups (wcsim/tune.py, `--tune`), keeping 2018/2022
+    # as a held-out test set.  The validation surface is flat (the whole
+    # grid spans ~0.003 log-loss) and the argmin's gain did not transfer to
+    # the test set, so we apply a one-SE-style rule: keep the prior weights
+    # (validation is indifferent) and adopt only the one consistent signal -
+    # every top validation combo has slope_scale >= 1.1, i.e. the globally
+    # fit Elo->goals slope is slightly too shallow at World Cup level - at
+    # its most conservative value.
     model_name: str = "ensemble"        # dc | bp | nb | ensemble
     half_life_days: float = 1095.0      # time-decay half-life for the goals fit (~3 yrs)
     friendly_weight: float = 0.5        # down-weight friendlies in the goals fit
+    slope_scale: float = 1.1            # calibration multiplier on the Elo->goals slope
     fit_min_year: int | None = 1990     # ignore very old matches when fitting goals
     max_goals: int = 12                 # truncation of the score grid (per side)
 

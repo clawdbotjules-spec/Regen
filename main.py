@@ -2,11 +2,12 @@
 
 Examples
 --------
-    python main.py                          # 20,000 sims, ensemble model
-    python main.py -n 50000 --seed 7        # more sims, different seed
+    python main.py                          # 100,000 sims, ensemble model
+    python main.py -n 20000 --seed 7        # quicker run, different seed
     python main.py --model dc               # Dixon-Coles only
     python main.py --validate               # match + tournament backtests first
     python main.py --sensitivity            # knob/parameter uncertainty report
+    python main.py --tune                   # hyperparameter grid (1998-2014 WCs)
     python main.py --show-ratings 25        # print the top-25 Elo table
 """
 
@@ -43,6 +44,7 @@ def build_config(args: argparse.Namespace) -> SimConfig:
         model_name=args.model,
         half_life_days=args.half_life,
         friendly_weight=args.friendly_weight,
+        slope_scale=args.slope_scale,
         max_goals=args.max_goals,
         host_boost=args.host_boost,
         host_group_home=not args.no_host_home,
@@ -55,7 +57,9 @@ def build_config(args: argparse.Namespace) -> SimConfig:
 
 def parse_args(argv=None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="2026 FIFA World Cup Monte-Carlo simulator")
-    p.add_argument("-n", "--sims", type=int, default=20_000, help="number of simulations")
+    p.add_argument("-n", "--sims", type=int, default=SimConfig.n_sims,
+                   help="number of simulations (default 100k, ~15s; "
+                        "use 20k for quick iteration)")
     p.add_argument("--seed", type=int, default=42, help="random seed (reproducibility)")
     p.add_argument("--data-dir", default="data", help="directory holding the CSVs")
     p.add_argument("--output", default="output/predictions.csv", help="predictions CSV path")
@@ -63,10 +67,16 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--model", default="ensemble", choices=MODEL_NAMES,
                    help="goals model: dc (Dixon-Coles), bp (bivariate Poisson), "
                         "nb (negative binomial), ensemble (mixture of all three)")
-    p.add_argument("--half-life", type=float, default=1095.0,
+    p.add_argument("--half-life", type=float, default=SimConfig.half_life_days,
                    help="time-decay half-life in days for the goals fit")
-    p.add_argument("--friendly-weight", type=float, default=0.5,
+    p.add_argument("--friendly-weight", type=float, default=SimConfig.friendly_weight,
                    help="weight of friendlies in the goals fit (1.0 = same as competitive)")
+    p.add_argument("--slope-scale", type=float, default=SimConfig.slope_scale,
+                   help="calibration multiplier on the Elo->goals slope "
+                        "(default tuned on the 1998-2014 World Cups)")
+    p.add_argument("--tune", action="store_true",
+                   help="re-run the hyperparameter grid search on the 1998-2014 "
+                        "validation World Cups (slow; prints the winning combo)")
     p.add_argument("--home-advantage", type=float, default=100.0, help="Elo home advantage")
     p.add_argument("--host-boost", type=float, default=0.0,
                    help="extra Elo for host nations (USA/Canada/Mexico) everywhere")
@@ -142,6 +152,16 @@ def main(argv=None) -> None:
         print("  (* = qualified for the 2026 tournament)")
 
     fit_cutoff = cutoff if cutoff is not None else results["date"].max() + pd.Timedelta(days=1)
+
+    if args.tune:
+        _header("HYPERPARAMETER TUNING (validation: 1998-2014 World Cups)")
+        from wcsim.tune import tune as run_tune
+        best, tune_table = run_tune(results, cfg)
+        os.makedirs(cfg.output_dir, exist_ok=True)
+        tune_table.to_csv(os.path.join(cfg.output_dir, "tuning_grid.csv"), index=False)
+        import dataclasses
+        cfg = dataclasses.replace(cfg, **best)
+        print(f"\nUsing tuned parameters for this run: {best}")
 
     print(f"\nFitting goals model ({cfg.model_name}) ...")
     model = make_model(cfg.model_name, cfg).fit(prematch, cutoff=fit_cutoff)

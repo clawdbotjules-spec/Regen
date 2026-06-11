@@ -81,6 +81,9 @@ class GoalsModel(ABC):
     def __init__(self, cfg: SimConfig):
         self.cfg = cfg
         self._n_fit = 0
+        # post-hoc calibration multiplier on the Elo->goals slope; tuned
+        # out-of-sample (wcsim/tune.py) and applied at prediction time.
+        self.slope_scale = cfg.slope_scale
 
     # ------------------------------------------------------------------ #
     def _prepare(self, prematch: pd.DataFrame, cutoff: pd.Timestamp) -> _FitData:
@@ -208,6 +211,7 @@ class DixonColesModel(GoalsModel):
 
     def _rates(self, r_home, r_away, neutral):
         c0, c1, c2, _ = self.theta
+        c1 = c1 * self.slope_scale
         d = (np.asarray(r_home, dtype=float) - np.asarray(r_away, dtype=float)) / _ELO_SCALE
         h = np.where(np.asarray(neutral), 0.0, 1.0)
         return np.exp(c0 + c1 * d + c2 * h), np.exp(c0 - c1 * d)
@@ -297,6 +301,7 @@ class BivariatePoissonModel(GoalsModel):
 
     def _rates(self, r_home, r_away, neutral):
         c0, c1, c2, ll3 = self.theta
+        c1 = c1 * self.slope_scale
         d = (np.asarray(r_home, dtype=float) - np.asarray(r_away, dtype=float)) / _ELO_SCALE
         h = np.where(np.asarray(neutral), 0.0, 1.0)
         l1 = np.exp(c0 + c1 * d + c2 * h)
@@ -385,6 +390,7 @@ class NegBinModel(GoalsModel):
 
     def _rates(self, r_home, r_away, neutral):
         c0, c1, c2, _ = self.theta
+        c1 = c1 * self.slope_scale
         d = (np.asarray(r_home, dtype=float) - np.asarray(r_away, dtype=float)) / _ELO_SCALE
         h = np.where(np.asarray(neutral), 0.0, 1.0)
         return np.exp(c0 + c1 * d + c2 * h), np.exp(c0 - c1 * d)

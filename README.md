@@ -25,7 +25,7 @@ and a two-tournament backtest.
 
 ```bash
 python -m pip install -r requirements.txt   # pandas, numpy, scipy
-python main.py                              # 20,000 sims, ensemble model, seed 42
+python main.py                              # 100,000 sims, ensemble model, seed 42
 ```
 
 The data (`results.csv`, `shootouts.csv`, `groups.csv`) is committed, so this
@@ -35,16 +35,32 @@ works out of the box; refresh the history any time with
 ### Useful flags
 
 ```bash
-python main.py -n 50000 --seed 7        # more sims, different seed
+python main.py -n 20000 --seed 7        # quicker run, different seed
 python main.py --model dc               # Dixon-Coles only (or bp / nb / ensemble)
 python main.py --validate               # match- AND tournament-level backtests
 python main.py --sensitivity            # knob + parameter uncertainty report
+python main.py --tune                   # hyperparameter grid on 1998-2014 WCs
 python main.py --half-life 540          # shorter goals-model memory (~1.5 yrs)
 python main.py --friendly-weight 0.25   # trust friendlies even less
+python main.py --slope-scale 1.0        # undo the WC-level slope calibration
 python main.py --no-host-home           # treat host group matches as neutral
 python main.py --shootout-model weighted --shootout-weight 0   # coin-flip pens
 python main.py --help                   # everything else
 ```
+
+### How many simulations? (the error budget)
+
+The forecast has three error sources, and they are *not* equal:
+
+| source | size (champion %, favourite) | fix |
+|---|---|---|
+| Monte-Carlo noise | ±0.6pp at 20k sims → **±0.13pp at 100k** | more sims (cheap: 100k ≈ 15s — the default) |
+| goals-model parameter uncertainty | ±5–10pp (5th–95th pct) | more data; can't buy with sims |
+| modeling choices (knobs, model family) | ±2–8pp spread | tuning helps little — see Step 8 |
+
+So 100k sims push simulation noise far below everything else; beyond that,
+extra sims polish a number whose true uncertainty is model-driven. Run
+`--sensitivity` to see the dominant terms for yourself.
 
 ### Outputs (written to `output/`)
 
@@ -153,10 +169,10 @@ multiclass log-loss / Brier / RPS, vs a Davidson Elo-only baseline fit by MLE):
 | pooled 2018+2022 (128) | log-loss | Brier | RPS |
 |---|---|---|---|
 | Elo-only (Davidson) | **1.0119** | 0.5972 | 0.2137 |
-| Negative binomial | 1.0122 | 0.5976 | 0.2138 |
-| Ensemble | 1.0144 | 0.5978 | 0.2140 |
-| Bivariate Poisson | 1.0147 | 0.5976 | 0.2140 |
-| Dixon-Coles | 1.0171 | 0.5986 | 0.2142 |
+| Negative binomial | 1.0151 | 0.5974 | 0.2140 |
+| Ensemble | 1.0185 | 0.5981 | 0.2144 |
+| Bivariate Poisson | 1.0196 | 0.5982 | 0.2146 |
+| Dixon-Coles | 1.0220 | 0.5991 | 0.2147 |
 
 **Honest read:** all five are within 0.005 log-loss — statistically
 indistinguishable on 128 matches, with the Elo baseline nominally first. The
@@ -166,15 +182,35 @@ goal models earn their place not by beating Elo on W/D/L but by producing
 **Tournament-level** (re-simulate 2018/2022 with their real groups and
 brackets, 10,000 sims each):
 
-- **WC 2018:** actual champion France was predicted 5.6% (rank 6 of 32);
-  champion log-loss 2.89 vs 3.47 uniform.
-- **WC 2022:** actual champion Argentina was predicted **21.4% (rank 2)**;
-  log-loss 1.54 vs 3.47 uniform.
-- Pooled stage-level Brier skill vs a "everyone equal" baseline: **+22% at
-  R16, +21% at QF, +3% SF, +7% Final, +12% Champion** — real but modest skill,
+- **WC 2018:** actual champion France was predicted 5.5% (rank 6 of 32);
+  champion log-loss 2.91 vs 3.47 uniform.
+- **WC 2022:** actual champion Argentina was predicted **21.8% (rank 2)**;
+  log-loss 1.53 vs 3.47 uniform.
+- Pooled stage-level Brier skill vs a "everyone equal" baseline: **+21% at
+  R16, +21% at QF, +1% SF, +5% Final, +11% Champion** — real but modest skill,
   strongest where the field is wide.
 
-### Step 7 — Sensitivity & uncertainty (`wcsim/sensitivity.py`), `--sensitivity`
+### Step 7 — Hyperparameter tuning (`wcsim/tune.py`), `--tune`
+The half-life, friendly weight and a calibration multiplier on the
+Elo→goals slope were grid-searched **out-of-sample**: validation on the
+1998–2014 World Cups (320 matches, each trained strictly pre-tournament),
+with 2018/2022 kept as an untouched test set. The full story, told honestly:
+
+- The validation surface is **flat** — the entire 108-combination grid spans
+  ~0.003 log-loss, so the weights barely matter and the argmin's edge is
+  noise. Consistent with that, the argmin's gain **did not transfer** to the
+  2018/2022 test set.
+- One signal *is* consistent: every top validation combination has
+  **slope_scale ≥ 1.1** — the slope fit on all international football
+  (dominated by mismatched qualifiers) is slightly too shallow for World Cup
+  play. Following a one-standard-error rule, the shipped defaults keep the
+  prior weights and adopt the signal at its most conservative value
+  (`slope_scale = 1.1`).
+- Takeaway: **the model's accuracy ceiling is data-limited, not
+  knob-limited.** The next real gains would come from richer inputs
+  (market odds, player-level data), not from tuning.
+
+### Step 8 — Sensitivity & uncertainty (`wcsim/sensitivity.py`), `--sensitivity`
 Re-runs the simulation under 12 modeling variations (half-life, friendly
 weight, model family, shootout treatment, host assumptions) and reports each
 top team's champion-probability spread vs Monte-Carlo noise — e.g. Spain
@@ -186,12 +222,13 @@ not modeled — the true bands are wider still.
 
 ---
 
-## Headline results (20,000 sims, ensemble, seed 42)
+## Headline results (100,000 sims, ensemble, seed 42)
 
-Spain ~21% champion, Argentina ~17%, France ~9%, England ~6%, Colombia and
-Brazil ~5–6%. UEFA takes the title in ~54% of sims, CONMEBOL ~35%. A host
-nation wins it all in ~3.5% of sims. Most likely Final: Spain vs Argentina
-(~7%). Full numbers regenerate with `python main.py`.
+Spain 23.3% champion (±0.13 MC), Argentina 17.6%, France 9.9%, England 6.9%,
+Brazil 5.3%, Colombia 5.0%. UEFA takes the title in ~57% of sims, CONMEBOL
+~34%. A host nation wins it all in ~2.7% of sims. Most likely Final: Spain vs
+Argentina (8.7%). Full numbers regenerate with `python main.py` — remember the
+sensitivity bands before quoting decimals.
 
 ## Project layout
 
@@ -218,6 +255,7 @@ wcsim/
   simulate.py              vectorised Monte-Carlo engine (48- and 32-team)
   analysis.py              round-by-round aggregation layer
   validate.py              match- and tournament-level backtests
+  tune.py                  out-of-sample hyperparameter grid search
   sensitivity.py           knob sensitivity + parameter uncertainty
 output/                    generated CSVs
 ```
